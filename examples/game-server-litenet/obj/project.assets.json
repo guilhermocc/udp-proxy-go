@@ -52,11 +52,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-client-litenet/game-client-litenet.csproj",
+      "projectUniqueName": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-server-litenet/game-client-litenet.csproj",
       "projectName": "game-client-litenet",
-      "projectPath": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-client-litenet/game-client-litenet.csproj",
+      "projectPath": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-server-litenet/game-client-litenet.csproj",
       "packagesPath": "/home/godoy/.nuget/packages/",
-      "outputPath": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-client-litenet/obj/",
+      "outputPath": "/srv/godoy/projetos/hackathon/udp-proxy-go/examples/game-server-litenet/obj/",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "/home/godoy/.nuget/NuGet/NuGet.Config"
