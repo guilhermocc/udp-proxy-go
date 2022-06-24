@@ -42,7 +42,7 @@ func main() {
 		}
 		defer proxyConn.Close()
 
-		_, err = proxyConn.Write([]byte("Hello from game server"))
+		_, err = proxyConn.Write([]byte(fmt.Sprintf("Hello from game server, i received %s\n", packet)))
 		if err != nil {
 			log.Println("error writing packet to proxy", err)
 			continue

@@ -38,6 +38,7 @@ func runWorker() {
 	}
 
 	zap.L().Info("Starting proxy server...")
+	proxy := proxy.NewProxy()
 	proxy.RunProxy()
 
 	<-ctx.Done()

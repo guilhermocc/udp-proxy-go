@@ -1,11 +1,9 @@
 package proxy
 
 import (
-	"flag"
-	"fmt"
-	"log"
+	"go.uber.org/zap"
 	"net"
-	"syscall"
+	"sync"
 	"time"
 )
 
@@ -19,80 +17,143 @@ const clientAddr = "localhost:2000"
 // This buffer size should be defined by a configuration
 const bufferSize = 4096
 
-func RunProxy() {
-	flag.Parse()
-	fmt.Printf("Listening: %v\nProxying: %v\n\n", localAddr, remoteAddr)
+type Proxy struct {
+	connectionsCache        sync.Map
+	datagramsBufferSize     int
+	mainPacketListenerConn  *net.UDPConn
+	clientPacketChannel     chan clientPacket
+	gameServerPacketChannel chan gameServerPacket
+}
 
+func NewProxy() *Proxy {
+	return &Proxy{
+		connectionsCache:        sync.Map{},
+		datagramsBufferSize:     bufferSize,
+		clientPacketChannel:     make(chan clientPacket),
+		gameServerPacketChannel: make(chan gameServerPacket),
+	}
+}
+
+func (p *Proxy) readLoop() {
+	datagramBuffer := make([]byte, p.datagramsBufferSize)
+	for {
+		size, srcAddress, err := p.mainPacketListenerConn.ReadFromUDP(datagramBuffer)
+		if err != nil {
+			zap.L().Error("error", zap.Error(err))
+			continue
+		}
+		if size > 0 {
+			//TODO: We should parse the packet here to extract the game room address prefix
+			gameRoomAddress, err := p.parseClientPacket(datagramBuffer)
+			if err != nil {
+				// TODO: think what should we do here
+				zap.L().Error("Could not parse client packet")
+			}
+
+			p.clientPacketChannel <- clientPacket{
+				sourceAddress:   srcAddress,
+				gameRoomAddress: gameRoomAddress,
+				data:            datagramBuffer[:size],
+			}
+		}
+	}
+}
+
+func (p *Proxy) parseClientPacket(buffer []byte) (string, error) {
+	// TODO: we must implement the parse logic here
+	return remoteAddr, nil
+}
+
+func (p *Proxy) handleClientPackets() {
+	for packt := range p.clientPacketChannel {
+		packetSourceString := packt.sourceAddress.String()
+		zap.L().Debug("packet received",
+			zap.String("src address", packetSourceString),
+			zap.Int("src port", packt.sourceAddress.Port),
+			zap.String("packet", string(packt.data)),
+			zap.Int("size", len(packt.data)),
+		)
+
+		conn, found := p.connectionsCache.Load(BuildConnectionCacheKey(packt.sourceAddress.String(), packt.gameRoomAddress))
+		if !found {
+			gameServerConnection, err := net.ListenUDP("udp", nil)
+			zap.L().Debug("new client connection",
+				zap.String("local port", gameServerConnection.LocalAddr().String()),
+			)
+
+			if err != nil {
+				zap.L().Error("upd proxy failed to dial", zap.Error(err))
+				return
+			}
+			gameServerAddrResolved, err := net.ResolveUDPAddr("udp", packt.gameRoomAddress)
+
+			p.connectionsCache.Store(packetSourceString, &GameServerConnection{
+				udp:                    gameServerConnection,
+				gameServerAddrResolved: gameServerAddrResolved,
+				lastActivity:           time.Now(),
+			})
+
+			gameServerConnection.WriteToUDP(packt.data, gameServerAddrResolved)
+
+			// Start process to keep listening from incoming packets from game server
+			go p.listenToGameServerPackets(packt.sourceAddress, gameServerConnection)
+		} else {
+			gameServerConnection := conn.(*GameServerConnection)
+			gameServerConnection.udp.WriteTo(packt.data, gameServerConnection.gameServerAddrResolved)
+
+			// TODO: Here we should update the connection last activity
+		}
+	}
+}
+
+func (p *Proxy) listenToGameServerPackets(clientAddr *net.UDPAddr, gameServerConn *net.UDPConn) {
+	clientAddrString := clientAddr.String()
+	datagramBuffer := make([]byte, p.datagramsBufferSize)
+	for {
+		size, _, err := gameServerConn.ReadFromUDP(datagramBuffer)
+		if err != nil {
+			gameServerConn.Close()
+			p.connectionsCache.Delete(clientAddrString)
+			return
+		}
+		// TODO: update client last activity
+		p.gameServerPacketChannel <- gameServerPacket{
+			clientAddress: clientAddr,
+			data:          datagramBuffer[:size],
+		}
+	}
+}
+
+func (p *Proxy) handleGameServerPackets() {
+	for packt := range p.gameServerPacketChannel {
+		zap.L().Debug("forwarded data from upstream", zap.Int("size", len(packt.data)), zap.String("data", string(packt.data)))
+		p.mainPacketListenerConn.WriteTo(packt.data, packt.clientAddress)
+	}
+}
+
+func (p *Proxy) setupMainListener() {
 	localAddrUdp, err := net.ResolveUDPAddr("udp", localAddr)
-	if err != nil {
-		panic(err)
-	}
-
-	clientAddrUdp, err := net.ResolveUDPAddr("udp", clientAddr)
-	if err != nil {
-		panic(err)
-	}
-
-	remoteAddrUdp, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
 		panic(err)
 	}
 
 	udpListener, err := net.ListenUDP("udp", localAddrUdp)
 	if err != nil {
+		zap.L().Error("Error creating main listener")
 		panic(err)
 	}
+
+	p.mainPacketListenerConn = udpListener
+}
+
+func (p *Proxy) RunProxy() {
+	p.setupMainListener()
+
+	go p.readLoop()
+	go p.handleClientPackets()
+	go p.handleGameServerPackets()
+
 	for {
-		packet := make([]byte, bufferSize)
-
-		// Reads a packet from the connection
-		numberOfBytes, _, flags, clientAddress, err := udpListener.ReadMsgUDP(packet, make([]byte, 0))
-
-		// If this flag is set, it means that we were unable to read the entire packet payload
-		if flags&syscall.MSG_TRUNC != 0 {
-			panic("unable")
-			fmt.Println("truncated read")
-		}
-		if numberOfBytes > 0 {
-			log.Println("New packet from", clientAddress)
-			log.Println("Packet:", string(packet[:numberOfBytes]))
-		}
-		if err != nil {
-			log.Println("error reading packet", err)
-			continue
-		}
-
-		gameServerConn, err := net.ListenUDP("udp", clientAddrUdp)
-		if err != nil {
-			log.Println("error dialing game server addr", err)
-			return
-		}
-		defer gameServerConn.Close()
-
-		// send data to gamer server conn
-		go func() {
-			_, err = gameServerConn.WriteTo(packet[:numberOfBytes], remoteAddrUdp)
-			if err != nil {
-				log.Println("error writing packet to game server", err)
-				return
-			}
-		}()
-
-		gameServerResponsePacket := make([]byte, 1024)
-
-		numberOfBytes, gruAddress, err := gameServerConn.ReadFromUDP(gameServerResponsePacket)
-		if numberOfBytes > 0 {
-			log.Println("New packet from game room", gruAddress)
-			log.Println("Packet:", string(packet[:numberOfBytes]))
-		}
-		if err != nil {
-			log.Println("error reading packet", err)
-			return
-		}
-
-		gameServerConn.WriteTo(gameServerResponsePacket, clientAddress)
-
-		time.Sleep(time.Minute * 2)
 
 	}
 }
