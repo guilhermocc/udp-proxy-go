@@ -87,7 +87,7 @@ func (p *Proxy) handleClientPackets() {
 			}
 			gameServerAddrResolved, err := net.ResolveUDPAddr("udp", packt.gameRoomAddress)
 
-			p.connectionsCache.Store(packetSourceString, &GameServerConnection{
+			p.connectionsCache.Store(BuildConnectionCacheKey(packetSourceString, packt.gameRoomAddress), &GameServerConnection{
 				udp:                    gameServerConnection,
 				gameServerAddrResolved: gameServerAddrResolved,
 				lastActivity:           time.Now(),
@@ -126,7 +126,7 @@ func (p *Proxy) listenToGameServerPackets(clientAddr *net.UDPAddr, gameServerCon
 
 func (p *Proxy) handleGameServerPackets() {
 	for packt := range p.gameServerPacketChannel {
-		zap.L().Debug("forwarded data from upstream", zap.Int("size", len(packt.data)), zap.String("data", string(packt.data)))
+		zap.L().Debug("forwarded data from game server back to client", zap.Int("size", len(packt.data)), zap.String("data", string(packt.data)))
 		p.mainPacketListenerConn.WriteTo(packt.data, packt.clientAddress)
 	}
 }
