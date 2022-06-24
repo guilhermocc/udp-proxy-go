@@ -8,7 +8,7 @@ class Server
         EventBasedNetListener listener = new EventBasedNetListener();
         NetManager server = new NetManager(listener);
         Console.WriteLine("Starting LiteNetLib Server");
-        server.Start(9050 /* port */);
+        server.Start(7777 /* port */);
 
         listener.ConnectionRequestEvent += request =>
         {

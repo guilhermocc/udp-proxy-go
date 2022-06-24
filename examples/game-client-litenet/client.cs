@@ -8,7 +8,7 @@ class Client
         NetManager client = new NetManager(listener);
         Console.WriteLine("Starting LiteNetLib Client");
         client.Start();
-        client.Connect("localhost" /* host ip or name */, 9050 /* port */, "SomeConnectionKey" /* text key or NetDataWriter */);
+        client.Connect("localhost" /* host ip or name */, 8888 /* port */, "SomeConnectionKey" /* text key or NetDataWriter */);
         listener.NetworkReceiveEvent += (fromPeer, dataReader, deliveryMethod) =>
         {
             Console.WriteLine("We got: {0}", dataReader.GetString(100 /* max length of string */));
