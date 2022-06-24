@@ -8,27 +8,26 @@ import (
 )
 
 var serverAddr *string = flag.String("r", "localhost:7777", "server address")
-var proxyAddr *string = flag.String("bla", "localhost:8888", "server address")
 
 func main() {
 	flag.Parse()
 	fmt.Printf("Listening: %v\n", *serverAddr)
 
-	proxyAddrUdp, err := net.ResolveUDPAddr("udp", *proxyAddr)
+	serverAddrUdp, err := net.ResolveUDPAddr("udp", *serverAddr)
 	if err != nil {
 		panic(err)
 	}
 
-	udpListener, err := net.ListenPacket("udp", *serverAddr)
+	udpListener, err := net.ListenUDP("udp", serverAddrUdp)
 	if err != nil {
 		panic(err)
 	}
 	for {
 		packet := make([]byte, 1024)
 		// Reads a packet from the connection
-		numberOfBytes, sourceAddress, err := udpListener.ReadFrom(packet)
+		numberOfBytes, proxyAddress, err := udpListener.ReadFromUDP(packet)
 		if numberOfBytes > 0 {
-			log.Println("New packet from", sourceAddress)
+			log.Println("New packet from", proxyAddress)
 			log.Println("Packet:", string(packet[:numberOfBytes]))
 		}
 		if err != nil {
@@ -36,7 +35,7 @@ func main() {
 			continue
 		}
 
-		proxyConn, err := net.DialUDP("udp", nil, proxyAddrUdp)
+		proxyConn, err := net.DialUDP("udp", nil, proxyAddress)
 		if err != nil {
 			log.Println("error dialing back to proxy", err)
 			return

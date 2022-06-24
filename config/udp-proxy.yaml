@@ -1,0 +1,7 @@
+internalApi:
+  port: 8081
+  gracefulShutdownTimeout: 10s
+  metrics:
+    enabled: true
+  healthcheck:
+    enabled: true
