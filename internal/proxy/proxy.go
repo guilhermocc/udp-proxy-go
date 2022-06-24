@@ -15,22 +15,30 @@ const remoteAddr = "localhost:7777"
 const clientAddr = "localhost:2000"
 
 // This buffer size should be defined by a configuration
-const bufferSize = 4096
+const bufferSize = 1500
+
+const connectionTimeout = time.Minute * 1
+
+const idleConnectionsSyncPeriod = time.Second
 
 type Proxy struct {
-	connectionsCache        sync.Map
-	datagramsBufferSize     int
-	mainPacketListenerConn  *net.UDPConn
-	clientPacketChannel     chan clientPacket
-	gameServerPacketChannel chan gameServerPacket
+	connectionsCache          sync.Map
+	datagramsBufferSize       int
+	mainPacketListenerConn    *net.UDPConn
+	clientPacketChannel       chan clientPacket
+	gameServerPacketChannel   chan gameServerPacket
+	connectionTimeout         time.Duration
+	idleConnectionsSyncPeriod time.Duration
 }
 
 func NewProxy() *Proxy {
 	return &Proxy{
-		connectionsCache:        sync.Map{},
-		datagramsBufferSize:     bufferSize,
-		clientPacketChannel:     make(chan clientPacket),
-		gameServerPacketChannel: make(chan gameServerPacket),
+		connectionsCache:          sync.Map{},
+		datagramsBufferSize:       bufferSize,
+		clientPacketChannel:       make(chan clientPacket),
+		gameServerPacketChannel:   make(chan gameServerPacket),
+		connectionTimeout:         connectionTimeout,
+		idleConnectionsSyncPeriod: idleConnectionsSyncPeriod,
 	}
 }
 
@@ -96,18 +104,27 @@ func (p *Proxy) handleClientPackets() {
 			gameServerConnection.WriteToUDP(packt.data, gameServerAddrResolved)
 
 			// Start process to keep listening from incoming packets from game server
-			go p.listenToGameServerPackets(packt.sourceAddress, gameServerConnection)
+			go p.listenToGameServerPackets(packt.sourceAddress, gameServerAddrResolved, gameServerConnection)
 		} else {
 			gameServerConnection := conn.(*GameServerConnection)
 			gameServerConnection.udp.WriteTo(packt.data, gameServerConnection.gameServerAddrResolved)
 
 			// TODO: Here we should update the connection last activity
 		}
+		p.updateClientLastActivity(BuildConnectionCacheKey(packt.sourceAddress.String(), packt.gameRoomAddress))
 	}
 }
 
-func (p *Proxy) listenToGameServerPackets(clientAddr *net.UDPAddr, gameServerConn *net.UDPConn) {
+func (p *Proxy) updateClientLastActivity(connectionCacheKey string) {
+	zap.L().Debug("updating client last activity", zap.String("client", connectionCacheKey))
+	if connWrapper, found := p.connectionsCache.Load(connectionCacheKey); found {
+		connWrapper.(*GameServerConnection).lastActivity = time.Now()
+	}
+}
+
+func (p *Proxy) listenToGameServerPackets(clientAddr *net.UDPAddr, gameServerAddr *net.UDPAddr, gameServerConn *net.UDPConn) {
 	clientAddrString := clientAddr.String()
+	gameServerAddrString := gameServerAddr.String()
 	datagramBuffer := make([]byte, p.datagramsBufferSize)
 	for {
 		size, _, err := gameServerConn.ReadFromUDP(datagramBuffer)
@@ -117,6 +134,7 @@ func (p *Proxy) listenToGameServerPackets(clientAddr *net.UDPAddr, gameServerCon
 			return
 		}
 		// TODO: update client last activity
+		p.updateClientLastActivity(BuildConnectionCacheKey(clientAddrString, gameServerAddrString))
 		p.gameServerPacketChannel <- gameServerPacket{
 			clientAddress: clientAddr,
 			data:          datagramBuffer[:size],
@@ -146,14 +164,35 @@ func (p *Proxy) setupMainListener() {
 	p.mainPacketListenerConn = udpListener
 }
 
+func (p *Proxy) freeIdleSocketsLoop() {
+	for {
+		time.Sleep(p.idleConnectionsSyncPeriod)
+		var clientsToTimeout []string
+
+		p.connectionsCache.Range(func(k, conn interface{}) bool {
+			if conn.(*GameServerConnection).lastActivity.Before(time.Now().Add(-p.connectionTimeout)) {
+				clientsToTimeout = append(clientsToTimeout, k.(string))
+			}
+			return true
+		})
+
+		for _, client := range clientsToTimeout {
+			zap.L().Debug("client timeout", zap.String("client", client))
+			conn, ok := p.connectionsCache.Load(client)
+			if ok {
+				conn.(*GameServerConnection).udp.Close()
+				p.connectionsCache.Delete(client)
+			}
+		}
+	}
+}
+
 func (p *Proxy) RunProxy() {
 	p.setupMainListener()
 
+	go p.freeIdleSocketsLoop()
 	go p.readLoop()
 	go p.handleClientPackets()
 	go p.handleGameServerPackets()
 
-	for {
-
-	}
 }
